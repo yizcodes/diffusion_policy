@@ -15,8 +15,12 @@ from diffusion_policy.common.pytorch_util import dict_apply
 class DiffusionUnetImagePolicy(BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
-            noise_scheduler: DDPMScheduler,
-            obs_encoder: MultiImageObsEncoder,
+            # 调用了 DDPMs Scheduler, 参数在 config 里，policy.noise_scheduler 下
+            noise_scheduler: DDPMScheduler, 
+            # 调用了 multi_image_obs_encoder.py， 参数在 config 里，diffusion_policy/model/vision/multi_image_obs_encoder.py 初始化方法
+            # 获得的 obs_encoder 是多个模型，多个 resnet 的 image encoder
+            # 每个 image encoder 有 nn.Sequential(this_resizer, this_randomizer, this_normalizer) + resnet 的操作
+            obs_encoder: MultiImageObsEncoder, 
             horizon, 
             n_action_steps, 
             n_obs_steps,
@@ -31,19 +35,27 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             **kwargs):
         super().__init__()
 
-        # parse shapes
+        # parse shapes， shape_meta 从 config 传入的，主要是 observation 和 action
         action_shape = shape_meta['action']['shape']
         assert len(action_shape) == 1
         action_dim = action_shape[0]
-        # get feature dim
+        # get feature dim, 调用了 obs_encoder, 给一个虚拟的输入，获取输出的形状
+        # 例如 两个 resnet + action shape = 2 * 512 + 2 = 1026
         obs_feature_dim = obs_encoder.output_shape()[0]
 
-        # create diffusion model
+        # create diffusion model，输入 dimension 是 action dimention + observation dimension (image + low_dim)
         input_dim = action_dim + obs_feature_dim
         global_cond_dim = None
-        if obs_as_global_cond:
+        if obs_as_global_cond: # 输入作为一个全局的 condition
             input_dim = action_dim
+            # n_obs_steps = 2, 需要两步的 observation, 我不是很理解 n_obs_steps 和 horizon 的区别？ 
             global_cond_dim = obs_feature_dim * n_obs_steps
+            
+        # input_dim: 输入数据的维度。在动作预测模型中，这可能是动作向量的维度。
+        # local_cond_dim 和 global_cond_dim: 分别代表局部条件和全局条件的维度。局部条件可以是与每个时间步骤相关的信息，而全局条件是整个序列共享的信息。
+        # diffusion_step_embed_dim: 扩散步骤编码的维度，用于将扩散时间步骤编码为一个连续的特征表示。
+        # down_dims, kernel_size, n_groups: 分别定义了U-Net下采样路径中不同层的维度、卷积核大小和分组卷积的组数。
+        # cond_predict_scale: 一个布尔值，指示模型是否预测每个通道的缩放因子和偏置项来调制特征图，这是FiLM（Feature-wise Linear Modulation）技术的一种应用。
 
         model = ConditionalUnet1D(
             input_dim=input_dim,
@@ -56,9 +68,9 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             cond_predict_scale=cond_predict_scale
         )
 
-        self.obs_encoder = obs_encoder
-        self.model = model
-        self.noise_scheduler = noise_scheduler
+        self.obs_encoder = obs_encoder # observation encoder
+        self.model = model # 预测 action 的 model
+        self.noise_scheduler = noise_scheduler # diffuser DDPMs, 噪音生成
         self.mask_generator = LowdimMaskGenerator(
             action_dim=action_dim,
             obs_dim=0 if obs_as_global_cond else obs_feature_dim,
@@ -77,7 +89,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
-        self.num_inference_steps = num_inference_steps
+        self.num_inference_steps = num_inference_steps # 100 diffusion step 的步数
     
     # ========= inference  ============
     def conditional_sample(self, 
@@ -184,6 +196,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             'action_pred': action_pred
         }
         return result
+
 
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):

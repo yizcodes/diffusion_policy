@@ -1,13 +1,15 @@
 defaults:
   - _self_
-  - task: real_pusht_image
+  - task: real_pusht_image # 去 task 目录下找 real_pusht_image.yaml
 
 name: train_diffusion_unet_image
+# _target_ 指定了这个配置文件的目标类
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
+
 
 horizon: 16
 n_obs_steps: 2
@@ -19,13 +21,16 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
+  # policy 类定义
   _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
 
+  # real_pusht_image.yaml 中定义了 shape_meta, 
   shape_meta: ${shape_meta}
   
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
     num_train_timesteps: 100
+    # beta_start 什么作用？
     beta_start: 0.0001
     beta_end: 0.02
     # beta_schedule is important
@@ -37,8 +42,10 @@ policy:
     prediction_type: epsilon # or sample
 
   obs_encoder:
+    # obs_encoder 类定义
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
     shape_meta: ${shape_meta}
+    # 图像的信息 decode 的方式
     rgb_model:
       _target_: diffusion_policy.model.vision.model_getter.get_resnet
       name: resnet18
@@ -50,13 +57,16 @@ policy:
     share_rgb_model: False
     imagenet_norm: True
 
+  # horizon ？
   horizon: ${horizon}
+  # 为啥 eval 的时候，n_action_steps 和 n_latency_steps 会被加起来？
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  # 和 horizon 什么关系？
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 100
-  obs_as_global_cond: ${obs_as_global_cond}
+  obs_as_global_cond: ${obs_as_global_cond} # true
   # crop_shape: null
-  diffusion_step_embed_dim: 128
+  diffusion_step_embed_dim: 128 # 应该是 timesteps encode 的维度
   down_dims: [512, 1024, 2048]
   kernel_size: 5
   n_groups: 8
@@ -65,7 +75,7 @@ policy:
   # scheduler.step params
   # predict_epsilon: True
 
-ema:
+ema: # exponential moving average
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
   update_after_step: 0
   inv_gamma: 1.0
@@ -110,7 +120,7 @@ training:
   freeze_encoder: False
   # training loop control
   # in epochs
-  rollout_every: 50
+  rollout_every: 50 # 做什么用的？
   checkpoint_every: 50
   val_every: 1
   sample_every: 5

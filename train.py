@@ -28,8 +28,10 @@ def main(cfg: OmegaConf):
     OmegaConf.resolve(cfg)
 
     cls = hydra.utils.get_class(cfg._target_)
-    workspace: BaseWorkspace = cls(cfg)
-    workspace.run()
+    # 主要是进行了配置文件的读取，进行了很多初始化的工作
+    # 例如调用了 train_diffusion_unet_image_workspace.py 里 TrainDiffusionUnetImageWorkspace
+    workspace: BaseWorkspace = cls(cfg) 
+    workspace.run() # 调用了 run 方法， train_diffusion_unet_image_workspace.py
 
 if __name__ == "__main__":
     main()

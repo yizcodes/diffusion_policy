@@ -10,8 +10,8 @@ from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 
 class MultiImageObsEncoder(ModuleAttrMixin):
     def __init__(self,
-            shape_meta: dict,
-            rgb_model: Union[nn.Module, Dict[str,nn.Module]],
+            shape_meta: dict, # 有 obs 和 action 的 key
+            rgb_model: Union[nn.Module, Dict[str,nn.Module]], # image encoder, 一个 resnet
             resize_shape: Union[Tuple[int,int], Dict[str,tuple], None]=None,
             crop_shape: Union[Tuple[int,int], Dict[str,tuple], None]=None,
             random_crop: bool=True,
@@ -40,12 +40,12 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             assert isinstance(rgb_model, nn.Module)
             key_model_map['rgb'] = rgb_model
 
-        obs_shape_meta = shape_meta['obs']
+        obs_shape_meta = shape_meta['obs'] # 获取 observation, image and low_dim data
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
             type = attr.get('type', 'low_dim')
             key_shape_map[key] = shape
-            if type == 'rgb':
+            if type == 'rgb': # 获得 rgb 的 model
                 rgb_keys.append(key)
                 # configure model for this key
                 this_model = None
@@ -59,7 +59,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                         this_model = copy.deepcopy(rgb_model)
                 
                 if this_model is not None:
-                    if use_group_norm:
+                    if use_group_norm: # rgb model 使用 group norm, 替换掉 batch norm
                         this_model = replace_submodules(
                             root_module=this_model,
                             predicate=lambda x: isinstance(x, nn.BatchNorm2d),
@@ -70,8 +70,8 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                     key_model_map[key] = this_model
                 
                 # configure resize
-                input_shape = shape
-                this_resizer = nn.Identity()
+                input_shape = shape # (3, 240, 320)
+                this_resizer = nn.Identity() # 定义一个 resizer
                 if resize_shape is not None:
                     if isinstance(resize_shape, dict):
                         h, w = resize_shape[key]
@@ -83,7 +83,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                     input_shape = (shape[0],h,w)
 
                 # configure randomizer
-                this_randomizer = nn.Identity()
+                this_randomizer = nn.Identity() # 定义一个 随机 croper
                 if crop_shape is not None:
                     if isinstance(crop_shape, dict):
                         h, w = crop_shape[key]
@@ -102,27 +102,29 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                             size=(h,w)
                         )
                 # configure normalizer
-                this_normalizer = nn.Identity()
+                this_normalizer = nn.Identity() # 定义一个 normalizer, 归一化图像
                 if imagenet_norm:
                     this_normalizer = torchvision.transforms.Normalize(
                         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
                 
+                # 定义一个 transform, 把这些都组合起来
                 this_transform = nn.Sequential(this_resizer, this_randomizer, this_normalizer)
                 key_transform_map[key] = this_transform
             elif type == 'low_dim':
                 low_dim_keys.append(key)
             else:
                 raise RuntimeError(f"Unsupported obs type: {type}")
-        rgb_keys = sorted(rgb_keys)
-        low_dim_keys = sorted(low_dim_keys)
+                
+        rgb_keys = sorted(rgb_keys) # ['camera_1', 'camera_2']
+        low_dim_keys = sorted(low_dim_keys) # ['robot_eef_pose']
 
-        self.shape_meta = shape_meta
-        self.key_model_map = key_model_map
-        self.key_transform_map = key_transform_map
-        self.share_rgb_model = share_rgb_model
-        self.rgb_keys = rgb_keys
-        self.low_dim_keys = low_dim_keys
-        self.key_shape_map = key_shape_map
+        self.shape_meta = shape_meta # obs and action 的 data 
+        self.key_model_map = key_model_map # pytorch 存储 rgb model 的 ModuleDict
+        self.key_transform_map = key_transform_map # 存储 上面定义的 transform 的 ModuleDict
+        self.share_rgb_model = share_rgb_model # 是否共享 share rgb model
+        self.rgb_keys = rgb_keys # ['camera_1', 'camera_2']
+        self.low_dim_keys = low_dim_keys # ['robot_eef_pose']
+        self.key_shape_map = key_shape_map # 存储了 obs 中数据的 shape, 单个数据，不是 batch
 
     def forward(self, obs_dict):
         batch_size = None
@@ -154,28 +156,28 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         else:
             # run each rgb obs to independent models
             for key in self.rgb_keys:
-                img = obs_dict[key]
+                img = obs_dict[key] # 获取 raw image
                 if batch_size is None:
                     batch_size = img.shape[0]
                 else:
                     assert batch_size == img.shape[0]
                 assert img.shape[1:] == self.key_shape_map[key]
-                img = self.key_transform_map[key](img)
-                feature = self.key_model_map[key](img)
-                features.append(feature)
+                img = self.key_transform_map[key](img) # 经过 resize crop normalize
+                feature = self.key_model_map[key](img) # 生成 1x512 size 的 feature
+                features.append(feature) # 得到一个list
         
         # process lowdim input
         for key in self.low_dim_keys:
-            data = obs_dict[key]
+            data = obs_dict[key] # 获取 raw low_dim observation
             if batch_size is None:
                 batch_size = data.shape[0]
             else:
                 assert batch_size == data.shape[0]
-            assert data.shape[1:] == self.key_shape_map[key]
+            assert data.shape[1:] == self.key_shape_map[key] # data 就是 1x2
             features.append(data)
         
         # concatenate all features
-        result = torch.cat(features, dim=-1)
+        result = torch.cat(features, dim=-1) # observation encode 数据 concat 到一起
         return result
     
     @torch.no_grad()
@@ -183,6 +185,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         example_obs_dict = dict()
         obs_shape_meta = self.shape_meta['obs']
         batch_size = 1
+        # 获取每个 observation 的形状，然后给出一个虚拟输入，然后去 forward
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
             this_obs = torch.zeros(

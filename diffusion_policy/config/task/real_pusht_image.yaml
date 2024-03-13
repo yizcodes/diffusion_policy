@@ -3,6 +3,7 @@ name: real_image
 image_shape: [3, 240, 320]
 dataset_path: data/pusht_real/real_pusht_20230105
 
+# shape_meta 是一个字典，包含了数据的 type 和 shape
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim
   obs:
@@ -27,6 +28,7 @@ shape_meta: &shape_meta
   action: 
     shape: [2]
 
+# 没有理解 env_runner 的作用，后面再看
 env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
