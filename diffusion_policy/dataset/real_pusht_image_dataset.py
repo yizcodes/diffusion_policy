@@ -81,7 +81,9 @@ class RealPushTImageDataset(BaseImageDataset):
                 store=zarr.MemoryStore()
             )
         
-        if delta_action:
+        # 在 robomimic 里，给的动作都是相对于上一帧的,所以叫 delta action
+        # 这个论文里，delta 的方式得到的效果并不好，所以使用的是绝对的 position
+        if delta_action: 
             # replace action as relative to previous frame
             actions = replay_buffer['action'][:]
             # support positions only at this time
@@ -115,21 +117,21 @@ class RealPushTImageDataset(BaseImageDataset):
             for key in rgb_keys + lowdim_keys:
                 key_first_k[key] = n_obs_steps
 
-        val_mask = get_val_mask(
+        val_mask = get_val_mask( # 看起来啥也没干啊，都是 False
             n_episodes=replay_buffer.n_episodes, 
             val_ratio=val_ratio,
             seed=seed)
         train_mask = ~val_mask
-        train_mask = downsample_mask(
+        train_mask = downsample_mask( # 看起来啥也没干啊，都是 True
             mask=train_mask, 
             max_n=max_train_episodes, 
             seed=seed)
 
         sampler = SequenceSampler(
             replay_buffer=replay_buffer, 
-            sequence_length=horizon+n_latency_steps,
-            pad_before=pad_before, 
-            pad_after=pad_after,
+            sequence_length=horizon+n_latency_steps, # n_latency_steps 训练的时候是 0，话说做什么用的
+            pad_before=pad_before, # 1
+            pad_after=pad_after, # 7
             episode_mask=train_mask,
             key_first_k=key_first_k)
         

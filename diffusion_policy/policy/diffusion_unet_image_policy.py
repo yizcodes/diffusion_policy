@@ -48,7 +48,8 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         global_cond_dim = None
         if obs_as_global_cond: # 输入作为一个全局的 condition
             input_dim = action_dim
-            # n_obs_steps = 2, 需要两步的 observation, 我不是很理解 n_obs_steps 和 horizon 的区别？ 
+            # n_obs_steps = 2, 需要两步的 observation
+            # 根据论文，这里定义的 horizon 就是论文里的 prediction horizon
             global_cond_dim = obs_feature_dim * n_obs_steps
             
         # input_dim: 输入数据的维度。在动作预测模型中，这可能是动作向量的维度。
@@ -57,20 +58,22 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         # down_dims, kernel_size, n_groups: 分别定义了U-Net下采样路径中不同层的维度、卷积核大小和分组卷积的组数。
         # cond_predict_scale: 一个布尔值，指示模型是否预测每个通道的缩放因子和偏置项来调制特征图，这是FiLM（Feature-wise Linear Modulation）技术的一种应用。
 
+        # 定义了一个 model
         model = ConditionalUnet1D(
-            input_dim=input_dim,
+            input_dim=input_dim, # action dim, 2 
             local_cond_dim=None,
-            global_cond_dim=global_cond_dim,
-            diffusion_step_embed_dim=diffusion_step_embed_dim,
-            down_dims=down_dims,
+            global_cond_dim=global_cond_dim, # bs_feature_dim * n_obs_steps
+            diffusion_step_embed_dim=diffusion_step_embed_dim, # diffusion step 经过 encode 后的维度
+            down_dims=down_dims, # Unet 下采样路径中不同层的维度
             kernel_size=kernel_size,
-            n_groups=n_groups,
-            cond_predict_scale=cond_predict_scale
+            n_groups=n_groups, # n groups 8, group norm 的 group 数
+            cond_predict_scale=cond_predict_scale # what is this for?
         )
 
         self.obs_encoder = obs_encoder # observation encoder
-        self.model = model # 预测 action 的 model
+        self.model = model # 预测 action 的 model， 
         self.noise_scheduler = noise_scheduler # diffuser DDPMs, 噪音生成
+        # 没有搞懂这个 maskgenerator 是干嘛的 ?
         self.mask_generator = LowdimMaskGenerator(
             action_dim=action_dim,
             obs_dim=0 if obs_as_global_cond else obs_feature_dim,
@@ -79,12 +82,12 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             action_visible=False
         )
         self.normalizer = LinearNormalizer()
-        self.horizon = horizon
-        self.obs_feature_dim = obs_feature_dim
-        self.action_dim = action_dim
-        self.n_action_steps = n_action_steps
-        self.n_obs_steps = n_obs_steps
-        self.obs_as_global_cond = obs_as_global_cond
+        self.horizon = horizon # 16
+        self.obs_feature_dim = obs_feature_dim # 1026
+        self.action_dim = action_dim # 2
+        self.n_action_steps = n_action_steps # 8
+        self.n_obs_steps = n_obs_steps # 2 
+        self.obs_as_global_cond = obs_as_global_cond # true
         self.kwargs = kwargs
 
         if num_inference_steps is None:
@@ -92,6 +95,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         self.num_inference_steps = num_inference_steps # 100 diffusion step 的步数
     
     # ========= inference  ============
+    # 训练过程不需要
     def conditional_sample(self, 
             condition_data, condition_mask,
             local_cond=None, global_cond=None,
@@ -131,7 +135,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         return trajectory
 
-
+    # 训练过程不需要
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -205,10 +209,10 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         # normalize input
         assert 'valid_mask' not in batch
-        nobs = self.normalizer.normalize(batch['obs'])
-        nactions = self.normalizer['action'].normalize(batch['action'])
-        batch_size = nactions.shape[0]
-        horizon = nactions.shape[1]
+        nobs = self.normalizer.normalize(batch['obs']) # [64, 2, 3, 240, 320]
+        nactions = self.normalizer['action'].normalize(batch['action']) # [64, 16, 2]
+        batch_size = nactions.shape[0] # 64
+        horizon = nactions.shape[1] # 16
 
         # handle different ways of passing observation
         local_cond = None
@@ -216,12 +220,12 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         trajectory = nactions
         cond_data = trajectory
         if self.obs_as_global_cond:
-            # reshape B, T, ... to B*T
+            # reshape B, T, ... to B*T 例如 [64, 2, 3, 240, 320] -> [64*2, 3, 240, 320], 方便处理吧
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self.obs_encoder(this_nobs) # [128, 1026]
             # reshape back to B, Do
-            global_cond = nobs_features.reshape(batch_size, -1)
+            global_cond = nobs_features.reshape(batch_size, -1) # [64, 2052]
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
@@ -232,6 +236,8 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             trajectory = cond_data.detach()
 
         # generate impainting mask
+        # 干嘛用的呢，调用了前面初始化的 mask generator
+        # 生成了一个 全是 false 的 mask, [64, 16, 2]
         condition_mask = self.mask_generator(trajectory.shape)
 
         # Sample noise that we'll add to the images
@@ -254,6 +260,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
         
         # Predict the noise residual
+        # pred [batch, 16, 2], 
         pred = self.model(noisy_trajectory, timesteps, 
             local_cond=local_cond, global_cond=global_cond)
 

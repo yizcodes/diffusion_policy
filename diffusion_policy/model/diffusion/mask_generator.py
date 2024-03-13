@@ -50,32 +50,34 @@ class LowdimMaskGenerator(ModuleAttrMixin):
         action_visible=False
         ):
         super().__init__()
-        self.action_dim = action_dim
-        self.obs_dim = obs_dim
-        self.max_n_obs_steps = max_n_obs_steps
-        self.fix_obs_steps = fix_obs_steps
-        self.action_visible = action_visible
+        self.action_dim = action_dim # 2
+        self.obs_dim = obs_dim # if obs_as_global_cond, 就是 0， why
+        self.max_n_obs_steps = max_n_obs_steps # 2
+        self.fix_obs_steps = fix_obs_steps # True
+        self.action_visible = action_visible # False
 
     @torch.no_grad()
-    def forward(self, shape, seed=None):
+    def forward(self, shape, seed=None): # shape 是 trajectory 的 shape
         device = self.device
-        B, T, D = shape
+        B, T, D = shape # 64, 16, 2
         assert D == (self.action_dim + self.obs_dim)
 
         # create all tensors on this device
+        # 生成一个随机数生成器
         rng = torch.Generator(device=device)
         if seed is not None:
             rng = rng.manual_seed(seed)
 
         # generate dim mask
+        # [64, 16, 2] all false in the beginning
         dim_mask = torch.zeros(size=shape, 
             dtype=torch.bool, device=device)
         is_action_dim = dim_mask.clone()
-        is_action_dim[...,:self.action_dim] = True
+        is_action_dim[...,:self.action_dim] = True # 这样不就全都是 True 了吗?
         is_obs_dim = ~is_action_dim
 
         # generate obs mask
-        if self.fix_obs_steps:
+        if self.fix_obs_steps: # 这是做啥的
             obs_steps = torch.full((B,), 
             fill_value=self.max_n_obs_steps, device=device)
         else:
@@ -83,9 +85,10 @@ class LowdimMaskGenerator(ModuleAttrMixin):
                 low=1, high=self.max_n_obs_steps+1, 
                 size=(B,), generator=rng, device=device)
             
-        steps = torch.arange(0, T, device=device).reshape(1,T).expand(B,T)
-        obs_mask = (steps.T < obs_steps).T.reshape(B,T,1).expand(B,T,D)
-        obs_mask = obs_mask & is_obs_dim
+        steps = torch.arange(0, T, device=device).reshape(1,T).expand(B,T) # [64, 16] 的 [0 - 15]
+        # [16, 64] 矩阵 < [64] 矩阵，然后转置又是 [64, 16] 的矩阵，然后扩展
+        obs_mask = (steps.T < obs_steps).T.reshape(B,T,1).expand(B,T,D) # [true, true, false, false, ...]
+        obs_mask = obs_mask & is_obs_dim # 这样下来又都是 False 了啊，实在是不理解
 
         # generate action mask
         if self.action_visible:

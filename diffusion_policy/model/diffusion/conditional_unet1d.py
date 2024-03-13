@@ -78,19 +78,20 @@ class ConditionalUnet1D(nn.Module):
         cond_predict_scale=False
         ):
         super().__init__()
-        all_dims = [input_dim] + list(down_dims)
+        all_dims = [input_dim] + list(down_dims) # 2 + [256, 512, 1024] = [2, 256, 512, 1024]
         start_dim = down_dims[0]
 
         dsed = diffusion_step_embed_dim
+        # timestep encoder to a 128 dim feature
         diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(dsed),
             nn.Linear(dsed, dsed * 4),
             nn.Mish(),
             nn.Linear(dsed * 4, dsed),
         )
-        cond_dim = dsed
+        cond_dim = dsed # 定义了一个 condision dimension?， 
         if global_cond_dim is not None:
-            cond_dim += global_cond_dim
+            cond_dim += global_cond_dim # 为什么 cond_dim += global_cond_dim? = (128 + 2052)
 
         in_out = list(zip(all_dims[:-1], all_dims[1:]))
 
