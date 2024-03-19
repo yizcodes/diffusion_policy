@@ -44,6 +44,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
+        # 这里调用了 policy/diffusion_unet_image_policy.py 里的 DiffusionUnetImagePolicy的初始化方法
         self.model: DiffusionUnetImagePolicy = hydra.utils.instantiate(cfg.policy)
 
         self.ema_model: DiffusionUnetImagePolicy = None
@@ -76,7 +77,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         normalizer = dataset.get_normalizer()
 
         # configure validation dataset
-        val_dataset = dataset.get_validation_dataset()
+        val_dataset = dataset.get_validation_dataset() # 这个从代码看起来，和 train_dataset 是一样的啊
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
         self.model.set_normalizer(normalizer)
@@ -103,7 +104,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 cfg.ema,
                 model=self.ema_model)
 
-        # configure env
+        # configure env， 这里是一直不理解的地方
         env_runner: BaseImageRunner
         env_runner = hydra.utils.instantiate(
             cfg.task.env_runner,
@@ -166,8 +167,8 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
 
-                        # compute loss
-                        raw_loss = self.model.compute_loss(batch)
+                        # 核心肯定就是 compute loss 了
+                        raw_loss = self.model.compute_loss(batch) 
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
